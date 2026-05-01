@@ -1,0 +1,28 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+*.token
+*.pem
+*.key
+secrets/
+private/
+
+# n8n container data (volume content, never push)
+shared/
+n8n_data/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Python / Node leftovers
+__pycache__/
+*.pyc
+node_modules/

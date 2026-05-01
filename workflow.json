@@ -1,0 +1,92 @@
+{
+  "name": "content-orchestrator-text-v1",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 21 * * *"
+            }
+          ]
+        }
+      },
+      "id": "1a000000-0000-0000-0000-000000000001",
+      "name": "Schedule 21:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fetch latest fb-post-* Gist with PAT (Code node — bypasses HTTP node sendHeaders schema bug)\nconst response = await this.helpers.httpRequest({\n  method: 'GET',\n  url: 'https://api.github.com/gists?per_page=10',\n  headers: {\n    'Authorization': 'token ' + $env.GIST_PAT,\n    'Accept': 'application/vnd.github+json',\n    'User-Agent': 'n8n-content-orchestrator'\n  },\n  json: true\n});\n\nconst arr = Array.isArray(response) ? response : [];\nconst fbGist = arr.find(g => (g.description || '').startsWith('fb-post-'));\nif (!fbGist) {\n  throw new Error('No fb-post-* Gist in latest 10. Available: ' + arr.slice(0, 3).map(g => g.description || '(no desc)').join(' | '));\n}\nconst fileEntry = Object.values(fbGist.files)[0];\nreturn [{\n  json: {\n    gist_id: fbGist.id,\n    gist_html_url: fbGist.html_url,\n    raw_url: fileEntry.raw_url,\n    filename: fileEntry.filename,\n    description: fbGist.description,\n    created_at: fbGist.created_at\n  }\n}];"
+      },
+      "id": "2a000000-0000-0000-0000-000000000002",
+      "name": "Pick Latest fb-post Gist",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.raw_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "3a000000-0000-0000-0000-000000000003",
+      "name": "Fetch Raw Markdown",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse YAML frontmatter + extract ## 草稿 (or ## draft) section\nconst raw = $input.first().json.data || $input.first().json;\nconst rawText = typeof raw === 'string' ? raw : JSON.stringify(raw);\n\nconst fmMatch = rawText.match(/^---\\s*\\n([\\s\\S]*?)\\n---\\s*\\n([\\s\\S]*)$/);\nif (!fmMatch) throw new Error('No YAML frontmatter found in Gist content');\n\nconst fmText = fmMatch[1];\nconst body = fmMatch[2];\n\n// Simple YAML parser (flat keys + string arrays only)\nconst meta = {};\nfmText.split('\\n').forEach(line => {\n  const m = line.match(/^([a-z_]+):\\s*(.*)$/);\n  if (m) {\n    let val = m[2].trim();\n    if (val.startsWith('[') && val.endsWith(']')) {\n      val = val.slice(1, -1).split(',').map(s => s.trim().replace(/^[\"']|[\"']$/g, ''));\n    } else if (val.startsWith('\"') && val.endsWith('\"')) {\n      val = val.slice(1, -1);\n    } else if (!isNaN(val) && val !== '') {\n      val = Number(val);\n    }\n    meta[m[1]] = val;\n  }\n});\n\n// Extract draft segment (matches both ## 草稿 and ## draft)\nconst draftMatch = body.match(/##\\s*(?:草稿|draft)\\s*\\n([\\s\\S]*?)(?=\\n##\\s|$)/i);\nlet draft = draftMatch ? draftMatch[1].trim() : body.trim();\n\nreturn [{\n  json: {\n    metadata: meta,\n    post_text: draft,\n    post_text_chars: draft.length,\n    format: meta.format || 'text',\n    gist_id: $('Pick Latest fb-post Gist').first().json.gist_id,\n    gist_url: $('Pick Latest fb-post Gist').first().json.gist_html_url\n  }\n}];"
+      },
+      "id": "4a000000-0000-0000-0000-000000000004",
+      "name": "Parse Frontmatter + Extract Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Exchange system user token -> page-scoped token, then POST to /{page_id}/feed\n// (System user tokens cannot directly POST; must exchange via /me/accounts first)\nconst SYS_USER_TOKEN = $env.FB_SYSTEM_USER_TOKEN;\nconst PAGE_ID = $env.FB_PAGE_ID;\nconst V = $env.FB_GRAPH_VERSION || 'v24.0';\nconst postText = $input.first().json.post_text;\n\nif (!postText || !postText.trim()) {\n  throw new Error('post_text is empty, cannot publish');\n}\n\n// Step 1: exchange system user token -> page-scoped access_token via /me/accounts\nconst accounts = await this.helpers.httpRequest({\n  method: 'GET',\n  url: `https://graph.facebook.com/${V}/me/accounts`,\n  qs: { fields: 'id,name,access_token', limit: 100, access_token: SYS_USER_TOKEN },\n  json: true\n});\n\nconst pages = accounts.data || [];\nconst page = pages.find(p => String(p.id) === String(PAGE_ID));\nif (!page || !page.access_token) {\n  throw new Error(`Page ${PAGE_ID} not in /me/accounts. Visible: ${pages.map(p => p.id + ' ' + p.name).join(' | ') || '(empty)'}`);\n}\n\n// Step 2: POST to /{page_id}/feed with page-scoped token\nconst post = await this.helpers.httpRequest({\n  method: 'POST',\n  url: `https://graph.facebook.com/${V}/${PAGE_ID}/feed`,\n  body: {\n    message: postText,\n    access_token: page.access_token\n  },\n  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },\n  json: true\n});\n\nconst postId = post.id || '';\nconst [pageId, postPart] = postId.split('_');\nreturn [{\n  json: {\n    success: true,\n    fb_post_id: postId,\n    fb_permalink: postPart ? `https://www.facebook.com/${pageId}/posts/${postPart}` : `https://www.facebook.com/${PAGE_ID}`,\n    page_name: page.name,\n    chars: postText.length,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "5a000000-0000-0000-0000-000000000005",
+      "name": "Exchange Token + POST Feed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Schedule 21:00": {
+      "main": [[{ "node": "Pick Latest fb-post Gist", "type": "main", "index": 0 }]]
+    },
+    "Pick Latest fb-post Gist": {
+      "main": [[{ "node": "Fetch Raw Markdown", "type": "main", "index": 0 }]]
+    },
+    "Fetch Raw Markdown": {
+      "main": [[{ "node": "Parse Frontmatter + Extract Draft", "type": "main", "index": 0 }]]
+    },
+    "Parse Frontmatter + Extract Draft": {
+      "main": [[{ "node": "Exchange Token + POST Feed", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Taipei"
+  },
+  "staticData": null,
+  "tags": [],
+  "pinData": {},
+  "versionId": ""
+}
