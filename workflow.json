@@ -1,14 +1,11 @@
 {
-  "name": "content-orchestrator-text-v1",
+  "name": "content-orchestrator-v3-fb-ig-threads",
   "nodes": [
     {
       "parameters": {
         "rule": {
           "interval": [
-            {
-              "field": "cronExpression",
-              "expression": "0 21 * * *"
-            }
+            { "field": "cronExpression", "expression": "0 21 * * *" }
           ]
         }
       },
@@ -20,7 +17,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Fetch latest fb-post-* Gist with PAT (Code node — bypasses HTTP node sendHeaders schema bug)\nconst response = await this.helpers.httpRequest({\n  method: 'GET',\n  url: 'https://api.github.com/gists?per_page=10',\n  headers: {\n    'Authorization': 'token ' + $env.GIST_PAT,\n    'Accept': 'application/vnd.github+json',\n    'User-Agent': 'n8n-content-orchestrator'\n  },\n  json: true\n});\n\nconst arr = Array.isArray(response) ? response : [];\nconst fbGist = arr.find(g => (g.description || '').startsWith('fb-post-'));\nif (!fbGist) {\n  throw new Error('No fb-post-* Gist in latest 10. Available: ' + arr.slice(0, 3).map(g => g.description || '(no desc)').join(' | '));\n}\nconst fileEntry = Object.values(fbGist.files)[0];\nreturn [{\n  json: {\n    gist_id: fbGist.id,\n    gist_html_url: fbGist.html_url,\n    raw_url: fileEntry.raw_url,\n    filename: fileEntry.filename,\n    description: fbGist.description,\n    created_at: fbGist.created_at\n  }\n}];"
+        "jsCode": "// Fetch latest fb-post-* Gist (Code node — bypasses HTTP node sendHeaders schema bug)\nconst response = await this.helpers.httpRequest({\n  method: 'GET',\n  url: 'https://api.github.com/gists?per_page=10',\n  headers: {\n    'Authorization': 'token ' + $env.GIST_PAT,\n    'Accept': 'application/vnd.github+json',\n    'User-Agent': 'n8n-content-orchestrator'\n  },\n  json: true\n});\n\nconst arr = Array.isArray(response) ? response : [];\nconst fbGist = arr.find(g => (g.description || '').startsWith('fb-post-'));\nif (!fbGist) {\n  throw new Error('No fb-post-* Gist found in latest 10. Cloud routine 沒寫 Gist? Available: ' + arr.slice(0, 3).map(g => g.description || '(no desc)').join(' | '));\n}\nconst fileEntry = Object.values(fbGist.files)[0];\nreturn [{\n  json: {\n    gist_id: fbGist.id,\n    gist_html_url: fbGist.html_url,\n    raw_url: fileEntry.raw_url,\n    filename: fileEntry.filename,\n    description: fbGist.description,\n    created_at: fbGist.created_at\n  }\n}];"
       },
       "id": "2a000000-0000-0000-0000-000000000002",
       "name": "Pick Latest fb-post Gist",
@@ -32,11 +29,7 @@
       "parameters": {
         "url": "={{ $json.raw_url }}",
         "options": {
-          "response": {
-            "response": {
-              "responseFormat": "text"
-            }
-          }
+          "response": { "response": { "responseFormat": "text" } }
         }
       },
       "id": "3a000000-0000-0000-0000-000000000003",
@@ -47,38 +40,85 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parse YAML frontmatter + extract ## 草稿 (or ## draft) section\nconst raw = $input.first().json.data || $input.first().json;\nconst rawText = typeof raw === 'string' ? raw : JSON.stringify(raw);\n\nconst fmMatch = rawText.match(/^---\\s*\\n([\\s\\S]*?)\\n---\\s*\\n([\\s\\S]*)$/);\nif (!fmMatch) throw new Error('No YAML frontmatter found in Gist content');\n\nconst fmText = fmMatch[1];\nconst body = fmMatch[2];\n\n// Simple YAML parser (flat keys + string arrays only)\nconst meta = {};\nfmText.split('\\n').forEach(line => {\n  const m = line.match(/^([a-z_]+):\\s*(.*)$/);\n  if (m) {\n    let val = m[2].trim();\n    if (val.startsWith('[') && val.endsWith(']')) {\n      val = val.slice(1, -1).split(',').map(s => s.trim().replace(/^[\"']|[\"']$/g, ''));\n    } else if (val.startsWith('\"') && val.endsWith('\"')) {\n      val = val.slice(1, -1);\n    } else if (!isNaN(val) && val !== '') {\n      val = Number(val);\n    }\n    meta[m[1]] = val;\n  }\n});\n\n// Extract draft segment (matches both ## 草稿 and ## draft)\nconst draftMatch = body.match(/##\\s*(?:草稿|draft)\\s*\\n([\\s\\S]*?)(?=\\n##\\s|$)/i);\nlet draft = draftMatch ? draftMatch[1].trim() : body.trim();\n\nreturn [{\n  json: {\n    metadata: meta,\n    post_text: draft,\n    post_text_chars: draft.length,\n    format: meta.format || 'text',\n    gist_id: $('Pick Latest fb-post Gist').first().json.gist_id,\n    gist_url: $('Pick Latest fb-post Gist').first().json.gist_html_url\n  }\n}];"
+        "jsCode": "// Parse YAML frontmatter + extract draft\nconst raw = $input.first().json.data || $input.first().json;\nconst rawText = typeof raw === 'string' ? raw : JSON.stringify(raw);\n\nconst fmMatch = rawText.match(/^---\\s*\\n([\\s\\S]*?)\\n---\\s*\\n([\\s\\S]*)$/);\nif (!fmMatch) throw new Error('No YAML frontmatter found in Gist content');\n\nconst fmText = fmMatch[1];\nconst body = fmMatch[2];\n\n// Simple YAML parser (flat keys + arrays)\nconst meta = {};\nfmText.split('\\n').forEach(line => {\n  const m = line.match(/^([a-z_]+):\\s*(.*)$/);\n  if (m) {\n    let val = m[2].trim();\n    if (val.startsWith('[') && val.endsWith(']')) {\n      val = val.slice(1, -1).split(',').map(s => s.trim().replace(/^[\"']|[\"']$/g, '')).filter(s => s);\n    } else if (val.startsWith('\"') && val.endsWith('\"')) {\n      val = val.slice(1, -1);\n    } else if (!isNaN(val) && val !== '') {\n      val = Number(val);\n    }\n    meta[m[1]] = val;\n  }\n});\n\nconst draftMatch = body.match(/##\\s*(?:草稿|draft)\\s*\\n([\\s\\S]*?)(?=\\n##\\s|$)/i);\nlet draft = draftMatch ? draftMatch[1].trim() : body.trim();\n\nreturn [{\n  json: {\n    metadata: meta,\n    post_text: draft,\n    post_text_chars: draft.length,\n    format: meta.format || 'text',\n    gist_id: $('Pick Latest fb-post Gist').first().json.gist_id,\n    gist_url: $('Pick Latest fb-post Gist').first().json.gist_html_url\n  }\n}];"
       },
       "id": "4a000000-0000-0000-0000-000000000004",
-      "name": "Parse Frontmatter + Extract Draft",
+      "name": "Parse + Extract Draft",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [900, 300]
     },
     {
       "parameters": {
-        "jsCode": "// Exchange system user token -> page-scoped token, then POST to /{page_id}/feed\n// (System user tokens cannot directly POST; must exchange via /me/accounts first)\nconst SYS_USER_TOKEN = $env.FB_SYSTEM_USER_TOKEN;\nconst PAGE_ID = $env.FB_PAGE_ID;\nconst V = $env.FB_GRAPH_VERSION || 'v24.0';\nconst postText = $input.first().json.post_text;\n\nif (!postText || !postText.trim()) {\n  throw new Error('post_text is empty, cannot publish');\n}\n\n// Step 1: exchange system user token -> page-scoped access_token via /me/accounts\nconst accounts = await this.helpers.httpRequest({\n  method: 'GET',\n  url: `https://graph.facebook.com/${V}/me/accounts`,\n  qs: { fields: 'id,name,access_token', limit: 100, access_token: SYS_USER_TOKEN },\n  json: true\n});\n\nconst pages = accounts.data || [];\nconst page = pages.find(p => String(p.id) === String(PAGE_ID));\nif (!page || !page.access_token) {\n  throw new Error(`Page ${PAGE_ID} not in /me/accounts. Visible: ${pages.map(p => p.id + ' ' + p.name).join(' | ') || '(empty)'}`);\n}\n\n// Step 2: POST to /{page_id}/feed with page-scoped token\nconst post = await this.helpers.httpRequest({\n  method: 'POST',\n  url: `https://graph.facebook.com/${V}/${PAGE_ID}/feed`,\n  body: {\n    message: postText,\n    access_token: page.access_token\n  },\n  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },\n  json: true\n});\n\nconst postId = post.id || '';\nconst [pageId, postPart] = postId.split('_');\nreturn [{\n  json: {\n    success: true,\n    fb_post_id: postId,\n    fb_permalink: postPart ? `https://www.facebook.com/${pageId}/posts/${postPart}` : `https://www.facebook.com/${PAGE_ID}`,\n    page_name: page.name,\n    chars: postText.length,\n    timestamp: new Date().toISOString()\n  }\n}];"
+        "jsCode": "// Resolve image priority: Drive folder scan (NEW unprocessed) → Pollinations.ai fallback\n// Dedup uses $workflow.staticData (auto-persists across runs, no fs required)\nconst meta = $input.first().json.metadata;\nconst upstream = $input.first().json;\nconst topic = meta.image_topic_for_gen || meta.topic;\n\nlet image_base64 = null;\nlet image_source = 'none';\nlet image_error = null;\nlet drive_file_used = null;\n\nconst wfData = $getWorkflowStaticData('global');\nwfData.processed_drive_ids = wfData.processed_drive_ids || [];\n\ntry {\n  // ---- Step 1: Drive folder scan (priority) ----\n  if ($env.DRIVE_API_KEY && $env.DRIVE_INBOX_FOLDER_ID) {\n    const listResp = await this.helpers.httpRequest({\n      method: 'GET',\n      url: 'https://www.googleapis.com/drive/v3/files',\n      qs: {\n        q: `'${$env.DRIVE_INBOX_FOLDER_ID}' in parents and trashed=false and mimeType contains 'image/'`,\n        key: $env.DRIVE_API_KEY,\n        fields: 'files(id,name,mimeType,createdTime)',\n        orderBy: 'createdTime'\n      },\n      json: true\n    });\n    const files = (listResp.files || []).filter(f => f.mimeType && f.mimeType.startsWith('image/'));\n    if (files.length > 0) {\n      const fresh = files.find(f => !wfData.processed_drive_ids.includes(f.id));\n      if (fresh) {\n        const buf = await this.helpers.httpRequest({\n          method: 'GET',\n          url: `https://www.googleapis.com/drive/v3/files/${fresh.id}?alt=media&key=${$env.DRIVE_API_KEY}`,\n          encoding: 'arraybuffer',\n          json: false,\n          returnFullResponse: false\n        });\n        image_base64 = Buffer.from(buf).toString('base64');\n        image_source = `drive:${fresh.id}`;\n        drive_file_used = { id: fresh.id, name: fresh.name };\n        wfData.processed_drive_ids.push(fresh.id);\n      }\n    }\n  }\n\n  // ---- Step 2: Pollinations.ai fallback (with Chinese→English translation) ----\n  if (!image_base64 && topic) {\n    let imagePrompt = typeof topic === 'string' ? topic : String(topic);\n    // If topic contains Chinese chars, translate to English image prompt via Pollinations text endpoint\n    if (/[\\u4e00-\\u9fff]/.test(imagePrompt)) {\n      try {\n        const translateInstr = `Translate this into a concise English image generation prompt (visual description only, no quotes, max 30 words): ${imagePrompt}`;\n        const tResp = await this.helpers.httpRequest({\n          method: 'GET',\n          url: 'https://text.pollinations.ai/' + encodeURIComponent(translateInstr),\n          json: false,\n          returnFullResponse: false,\n          timeout: 30000\n        });\n        const translated = (typeof tResp === 'string' ? tResp : String(tResp)).trim();\n        if (translated && translated.length < 400 && translated.length > 5) {\n          imagePrompt = translated;\n        }\n      } catch (e) { /* fallback to original */ }\n    }\n    const prompt = imagePrompt + ', professional photography style, clean composition, no text overlay';\n    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&model=flux&nologo=true&safe=true`;\n    const buf = await this.helpers.httpRequest({\n      method: 'GET',\n      url,\n      encoding: 'arraybuffer',\n      json: false,\n      returnFullResponse: false,\n      timeout: 60000\n    });\n    image_base64 = Buffer.from(buf).toString('base64');\n    image_source = 'pollinations.ai:flux';\n    image_error = `prompt_used: ${imagePrompt.slice(0, 100)}`;\n  }\n\n  if (!image_base64) {\n    image_error = 'No new Drive image and no topic for fallback';\n  }\n} catch (e) {\n  image_error = e.message;\n}\n\nreturn [{\n  json: {\n    ...upstream,\n    image_base64,\n    image_source,\n    image_error,\n    has_image: !!image_base64,\n    drive_file_used,\n    processed_count: wfData.processed_drive_ids.length\n  }\n}];"
       },
       "id": "5a000000-0000-0000-0000-000000000005",
-      "name": "Exchange Token + POST Feed",
+      "name": "Resolve Image",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Upload image to ImgBB (anonymous) → public URL for IG/Threads to fetch\n// Note: env var named IMGUR_CLIENT_ID for compatibility, value is ImgBB API key\nconst upstream = $input.first().json;\nconst { image_base64, has_image } = upstream;\n\nlet image_url = null;\nlet imgur_id = null;\nlet imgur_error = null;\n\nif (has_image && $env.IMGUR_CLIENT_ID) {\n  try {\n    const resp = await this.helpers.httpRequest({\n      method: 'POST',\n      url: `https://api.imgbb.com/1/upload?key=${$env.IMGUR_CLIENT_ID}`,\n      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },\n      body: { image: image_base64 },\n      json: true\n    });\n    if (resp && resp.success && resp.data) {\n      image_url = resp.data.url || (resp.data.image && resp.data.image.url);\n      imgur_id = resp.data.id;\n    } else {\n      imgur_error = 'ImgBB returned non-success: ' + JSON.stringify(resp).slice(0, 500);\n    }\n  } catch (e) {\n    imgur_error = e.message;\n  }\n} else if (!has_image) {\n  imgur_error = 'no image to upload';\n} else {\n  imgur_error = 'IMGUR_CLIENT_ID (ImgBB) not set';\n}\n\n// Strip image_base64 from downstream output to keep payload small\nconst { image_base64: _strip, ...rest } = upstream;\nreturn [{\n  json: {\n    ...rest,\n    image_url,\n    imgur_id,\n    imgur_error\n  }\n}];"
+      },
+      "id": "6a000000-0000-0000-0000-000000000006",
+      "name": "Upload to Imgur",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Publish to FB Page: photo if image_url, else text-only\nconst upstream = $input.first().json;\nconst { post_text, image_url } = upstream;\nconst V = $env.FB_GRAPH_VERSION || 'v24.0';\nconst PAGE_ID = $env.FB_PAGE_ID;\nconst SYS_TOKEN = $env.FB_SYSTEM_USER_TOKEN;\n\nlet fb_result = { success: false };\n\ntry {\n  // Step 1: exchange page-scoped token\n  const accounts = await this.helpers.httpRequest({\n    method: 'GET',\n    url: `https://graph.facebook.com/${V}/me/accounts`,\n    qs: { fields: 'id,name,access_token', limit: 100, access_token: SYS_TOKEN },\n    json: true\n  });\n  const page = (accounts.data || []).find(p => String(p.id) === String(PAGE_ID));\n  if (!page) throw new Error(`Page ${PAGE_ID} not in /me/accounts`);\n  const pageToken = page.access_token;\n\n  // Step 2: post (photo if image, else feed)\n  let post;\n  if (image_url) {\n    post = await this.helpers.httpRequest({\n      method: 'POST',\n      url: `https://graph.facebook.com/${V}/${PAGE_ID}/photos`,\n      body: { url: image_url, caption: post_text, access_token: pageToken },\n      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },\n      json: true\n    });\n  } else {\n    post = await this.helpers.httpRequest({\n      method: 'POST',\n      url: `https://graph.facebook.com/${V}/${PAGE_ID}/feed`,\n      body: { message: post_text, access_token: pageToken },\n      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },\n      json: true\n    });\n  }\n\n  const postId = post.post_id || post.id || '';\n  const [pageNum, postPart] = (postId || '').split('_');\n  fb_result = {\n    success: true,\n    post_id: postId,\n    permalink: postPart ? `https://www.facebook.com/${pageNum}/posts/${postPart}` : `https://www.facebook.com/${PAGE_ID}`,\n    type: image_url ? 'photo' : 'text'\n  };\n} catch (e) {\n  fb_result = { success: false, error: e.message };\n}\n\nreturn [{ json: { ...upstream, fb_result } }];"
+      },
+      "id": "7a000000-0000-0000-0000-000000000007",
+      "name": "Publish FB Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Publish to Instagram (requires image_url + IG_BUSINESS_ACCOUNT_ID + system user token)\nconst upstream = $input.first().json;\nconst { post_text, image_url, metadata } = upstream;\nconst V = $env.FB_GRAPH_VERSION || 'v24.0';\nconst IG_ID = $env.IG_BUSINESS_ACCOUNT_ID;\nconst SYS_TOKEN = $env.FB_SYSTEM_USER_TOKEN;\n\nlet ig_result = { success: false, skipped: false };\n\nif (!image_url) {\n  ig_result = { success: false, skipped: true, reason: 'IG requires image, none resolved' };\n} else if (!IG_ID || !SYS_TOKEN) {\n  ig_result = { success: false, skipped: true, reason: 'IG env not configured' };\n} else {\n  try {\n    // Build caption (post text + hashtags from metadata.tags)\n    const tags = (metadata && Array.isArray(metadata.tags)) ? metadata.tags.map(t => '#' + String(t).replace(/^#/, '')).join(' ') : '';\n    const caption = tags ? (post_text + '\\n\\n' + tags) : post_text;\n\n    // Step 1: create media container\n    const container = await this.helpers.httpRequest({\n      method: 'POST',\n      url: `https://graph.facebook.com/${V}/${IG_ID}/media`,\n      qs: {\n        image_url: image_url,\n        caption: caption,\n        access_token: SYS_TOKEN\n      },\n      json: true\n    });\n    const creationId = container.id;\n    if (!creationId) throw new Error('No creation_id from /media: ' + JSON.stringify(container).slice(0, 300));\n\n    // Step 2: poll status (up to ~30s)\n    let status = 'IN_PROGRESS';\n    for (let i = 0; i < 10; i++) {\n      await new Promise(r => setTimeout(r, 3000));\n      const statusResp = await this.helpers.httpRequest({\n        method: 'GET',\n        url: `https://graph.facebook.com/${V}/${creationId}`,\n        qs: { fields: 'status_code', access_token: SYS_TOKEN },\n        json: true\n      });\n      status = statusResp.status_code;\n      if (status === 'FINISHED') break;\n      if (status === 'ERROR') throw new Error('IG container error: ' + JSON.stringify(statusResp));\n    }\n    if (status !== 'FINISHED') throw new Error('IG container not ready after polling: ' + status);\n\n    // Step 3: publish\n    const publishResp = await this.helpers.httpRequest({\n      method: 'POST',\n      url: `https://graph.facebook.com/${V}/${IG_ID}/media_publish`,\n      qs: { creation_id: creationId, access_token: SYS_TOKEN },\n      json: true\n    });\n\n    ig_result = {\n      success: true,\n      media_id: publishResp.id,\n      permalink: `https://www.instagram.com/p/${publishResp.id}/`\n    };\n  } catch (e) {\n    ig_result = { success: false, error: e.message };\n  }\n}\n\nreturn [{ json: { ...upstream, ig_result } }];"
+      },
+      "id": "8a000000-0000-0000-0000-000000000008",
+      "name": "Publish Instagram",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Publish to Threads with graceful 500-char truncation at sentence boundary\nconst upstream = $input.first().json;\nconst { post_text, image_url } = upstream;\nconst T_TOKEN = $env.THREADS_LONG_LIVED_TOKEN;\nconst T_USER = $env.THREADS_USER_ID;\n\nlet threads_result = { success: false, skipped: false };\n\n// Truncate at sentence boundary, fallback to ellipsis. Default soft limit 480 to leave headroom.\nfunction truncateThreads(text, max = 480) {\n  if (!text) return '';\n  if (text.length <= max) return text;\n  const cut = text.slice(0, max);\n  const boundaries = ['。', '. ', '！', '!', '？', '?', '\\n\\n', '\\n'];\n  let lastIdx = -1;\n  for (const b of boundaries) {\n    const idx = cut.lastIndexOf(b);\n    if (idx > lastIdx) lastIdx = idx + b.length;\n  }\n  if (lastIdx > max * 0.6) return cut.slice(0, lastIdx).trim();\n  return cut.slice(0, max - 3).trim() + '...';\n}\n\nif (!T_TOKEN || !T_USER) {\n  threads_result = { success: false, skipped: true, reason: 'Threads env not configured (waiting for OAuth)' };\n} else {\n  try {\n    const original = post_text || '';\n    const text = truncateThreads(original, 480);\n    const wasTruncated = original.length > text.length;\n    const mediaType = image_url ? 'IMAGE' : 'TEXT';\n\n    const containerQs = {\n      media_type: mediaType,\n      text: text,\n      access_token: T_TOKEN\n    };\n    if (image_url) containerQs.image_url = image_url;\n\n    const container = await this.helpers.httpRequest({\n      method: 'POST',\n      url: `https://graph.threads.net/v1.0/${T_USER}/threads`,\n      qs: containerQs,\n      json: true\n    });\n    const containerId = container.id;\n    if (!containerId) throw new Error('No creation_id from Threads /threads: ' + JSON.stringify(container).slice(0, 300));\n\n    await new Promise(r => setTimeout(r, image_url ? 5000 : 2000));\n\n    const publishResp = await this.helpers.httpRequest({\n      method: 'POST',\n      url: `https://graph.threads.net/v1.0/${T_USER}/threads_publish`,\n      qs: { creation_id: containerId, access_token: T_TOKEN },\n      json: true\n    });\n\n    threads_result = {\n      success: true,\n      thread_id: publishResp.id,\n      type: mediaType,\n      original_chars: original.length,\n      published_chars: text.length,\n      truncated: wasTruncated\n    };\n  } catch (e) {\n    threads_result = { success: false, error: e.message };\n  }\n}\n\nreturn [{ json: { ...upstream, threads_result } }];"
+      },
+      "id": "9a000000-0000-0000-0000-000000000009",
+      "name": "Publish Threads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate final log\nconst u = $input.first().json;\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    gist_id: u.gist_id,\n    gist_url: u.gist_url,\n    chars: u.post_text_chars,\n    image: { source: u.image_source, has_image: u.has_image, error: u.image_error, url: u.image_url, imgur_error: u.imgur_error },\n    fb: u.fb_result,\n    ig: u.ig_result,\n    threads: u.threads_result,\n    summary: [\n      u.fb_result && u.fb_result.success ? 'FB OK' : ('FB FAIL: ' + (u.fb_result && u.fb_result.error || 'unknown')),\n      u.ig_result && u.ig_result.success ? 'IG OK' : (u.ig_result && u.ig_result.skipped ? 'IG SKIPPED' : ('IG FAIL: ' + (u.ig_result && u.ig_result.error || 'unknown'))),\n      u.threads_result && u.threads_result.success ? 'Threads OK' : (u.threads_result && u.threads_result.skipped ? 'Threads SKIPPED' : ('Threads FAIL: ' + (u.threads_result && u.threads_result.error || 'unknown')))\n    ].join(' | ')\n  }\n}];"
+      },
+      "id": "10000000-0000-0000-0000-00000000000a",
+      "name": "Final Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 300]
     }
   ],
   "connections": {
-    "Schedule 21:00": {
-      "main": [[{ "node": "Pick Latest fb-post Gist", "type": "main", "index": 0 }]]
-    },
-    "Pick Latest fb-post Gist": {
-      "main": [[{ "node": "Fetch Raw Markdown", "type": "main", "index": 0 }]]
-    },
-    "Fetch Raw Markdown": {
-      "main": [[{ "node": "Parse Frontmatter + Extract Draft", "type": "main", "index": 0 }]]
-    },
-    "Parse Frontmatter + Extract Draft": {
-      "main": [[{ "node": "Exchange Token + POST Feed", "type": "main", "index": 0 }]]
-    }
+    "Schedule 21:00": { "main": [[{ "node": "Pick Latest fb-post Gist", "type": "main", "index": 0 }]] },
+    "Pick Latest fb-post Gist": { "main": [[{ "node": "Fetch Raw Markdown", "type": "main", "index": 0 }]] },
+    "Fetch Raw Markdown": { "main": [[{ "node": "Parse + Extract Draft", "type": "main", "index": 0 }]] },
+    "Parse + Extract Draft": { "main": [[{ "node": "Resolve Image", "type": "main", "index": 0 }]] },
+    "Resolve Image": { "main": [[{ "node": "Upload to Imgur", "type": "main", "index": 0 }]] },
+    "Upload to Imgur": { "main": [[{ "node": "Publish FB Page", "type": "main", "index": 0 }]] },
+    "Publish FB Page": { "main": [[{ "node": "Publish Instagram", "type": "main", "index": 0 }]] },
+    "Publish Instagram": { "main": [[{ "node": "Publish Threads", "type": "main", "index": 0 }]] },
+    "Publish Threads": { "main": [[{ "node": "Final Log", "type": "main", "index": 0 }]] }
   },
   "active": false,
   "settings": {

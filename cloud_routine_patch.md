@@ -1,8 +1,11 @@
-# Cloud Routine PATCH Template
+# Cloud Routine PATCH Template (v3)
 
 > Two text snippets to append to your existing Anthropic cloud routine prompts.
 > They make the routine write its output to a GitHub Gist that the n8n
 > orchestrator can fetch later.
+>
+> The cloud sandbox has full outbound network access — `curl` to GitHub Gist
+> API works. Confirmed via spike on 2026-05-01.
 
 ---
 
@@ -15,21 +18,18 @@
 3. Save the routine
 4. Optionally click **Run now** once to verify a Gist gets written
 
-The cloud sandbox has full outbound network access — `curl` to GitHub Gist
-API works. Confirmed via spike on 2026-05-01.
-
 ---
 
 ## PATCH-1 (paste at top of routine prompt)
 
 ```
-> ⚠️ Rule update
+> Rule update
 >
 > 1. Publish path: this routine no longer relies on a local agent picking up
 >    the response. Instead, the routine itself writes to a GitHub Gist (see
 >    "Step X: write Gist" appended at the end of this prompt).
 > 2. n8n orchestrator pulls the latest Gist daily at the configured cron time
->    and posts to the target platform.
+>    and posts to the target platforms (FB / IG / Threads).
 > 3. The routine MUST emit YAML frontmatter at the top of the markdown payload
 >    so n8n can parse format / topic / etc.
 ```
@@ -58,7 +58,7 @@ cat > /tmp/post.md << 'EOF'
 post_date: <YYYY-MM-DD>
 formula: <e.g. F-DAILY | F-TOOL | F-RECAP>
 format: text
-topic: "<one-line topic in your language>"
+topic: "<one-line topic in your language; used for image gen if Drive folder empty>"
 post_text_chars: <actual char count>
 platforms: [fb_page]
 tags: [<3-5 tags>]
@@ -101,7 +101,7 @@ GIST_HTML=$(echo "$GIST_RESP" | python3 -c "import json,sys; d=json.load(sys.std
 GIST_RAW=$(echo "$GIST_RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); fs=list(d.get('files',{}).values()); print(fs[0].get('raw_url','NO_RAW') if fs else 'NO_RAW')" 2>&1)
 
 echo ""
-echo "=== A3 Gist Bridge Result ==="
+echo "=== Gist Bridge Result ==="
 if [ "$GIST_HTML" != "FAIL" ] && [ "$GIST_HTML" != "" ]; then
   echo "GIST_OK"
   echo "html_url: $GIST_HTML"
@@ -120,8 +120,40 @@ Your final response MUST include:
 2. The complete markdown draft (frontmatter + draft body) — even if Gist
    write fails, this is the fallback the user can copy-paste manually
 3. The Voice Lock self-checks (if your routine has them)
-4. The A3 Bridge Result line: `GIST_OK` + URLs, or `GIST_FAIL` + error
+4. The Gist Bridge Result line: `GIST_OK` + URLs, or `GIST_FAIL` + error
 ```
+
+---
+
+## What v3 adds vs v2
+
+The v3 n8n workflow downstream now:
+- Pulls a Drive folder for fresh image (priority) before falling back to AI gen
+- Translates Chinese topic to English image prompt via Pollinations text API
+- Uploads the image to ImgBB to get a public URL (IG requires public URL)
+- Publishes to FB Page + IG + Threads in sequence
+- Truncates Threads text gracefully at sentence boundary (480-char limit)
+
+Your cloud routine doesn't need to know any of this — just write the Gist with
+correct frontmatter and the orchestrator handles the rest.
+
+---
+
+## Optional: image_topic_for_gen field
+
+If you want to control the image prompt independent of `topic`, emit:
+
+```yaml
+---
+post_date: 2026-05-05
+topic: "你的中文文章主題"
+image_topic_for_gen: "English description of the image you want generated"
+---
+```
+
+The orchestrator prefers `image_topic_for_gen` over `topic` for image
+generation, so you can set them differently. If only `topic` is set, the
+orchestrator auto-translates Chinese topics to English image prompts.
 
 ---
 

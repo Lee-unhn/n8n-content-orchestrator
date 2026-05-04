@@ -8,7 +8,7 @@ services:
     ports:
       - "5678:5678"
     environment:
-      # n8n core
+      # ===== n8n core =====
       - GENERIC_TIMEZONE=Asia/Taipei
       - TZ=Asia/Taipei
       - N8N_SECURE_COOKIE=false
@@ -18,13 +18,24 @@ services:
       - WEBHOOK_URL=http://localhost:5678/
       - N8N_DIAGNOSTICS_ENABLED=false
       - N8N_PERSONALIZATION_ENABLED=false
-      # Allow Code nodes to read env vars via $env.NAME
+      # Allow Code nodes to read $env.VAR_NAME
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
-      # Workflow secrets (loaded from .env, see .env.example)
+      # ===== Secrets (loaded from .env via ${VAR}) =====
       - GIST_PAT=${GIST_PAT}
       - FB_SYSTEM_USER_TOKEN=${FB_SYSTEM_USER_TOKEN}
       - FB_PAGE_ID=${FB_PAGE_ID}
-      - FB_GRAPH_VERSION=${FB_GRAPH_VERSION:-v24.0}
+      - FB_GRAPH_VERSION=${FB_GRAPH_VERSION}
+      - IG_BUSINESS_ACCOUNT_ID=${IG_BUSINESS_ACCOUNT_ID:-}
+      - THREADS_USER_ID=${THREADS_USER_ID:-}
+      - THREADS_LONG_LIVED_TOKEN=${THREADS_LONG_LIVED_TOKEN:-}
+      - THREADS_APP_ID=${THREADS_APP_ID:-}
+      - THREADS_APP_SECRET=${THREADS_APP_SECRET:-}
+      - META_APP_ID=${META_APP_ID:-}
+      - META_APP_SECRET=${META_APP_SECRET:-}
+      - DRIVE_API_KEY=${DRIVE_API_KEY:-}
+      - DRIVE_INBOX_FOLDER_ID=${DRIVE_INBOX_FOLDER_ID:-}
+      - IMGUR_CLIENT_ID=${IMGUR_CLIENT_ID:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     volumes:
       - n8n_data:/home/node/.n8n
       - ./shared:/data/shared
